@@ -117,6 +117,7 @@ _product_list_vars :=
 _product_single_value_vars += PRODUCT_NAME
 _product_single_value_vars += PRODUCT_MODEL
 
+_product_list_vars += PRODUCT_BUILD_PROP_OVERRIDES
 # The resoure configuration options to use for this product.
 _product_list_vars += PRODUCT_LOCALES
 _product_list_vars += PRODUCT_AAPT_CONFIG
@@ -562,9 +563,11 @@ _readonly_late_variables := \
 
 # Modified internally in the build system
 _readonly_late_variables += \
+  PRODUCT_CFI_INCLUDE_PATHS \
   PRODUCT_COPY_FILES \
   PRODUCT_DEX_PREOPT_NEVER_ALLOW_STRIPPING \
   PRODUCT_DEX_PREOPT_BOOT_FLAGS \
+  PRODUCT_SOONG_NAMESPACES
 
 _readonly_early_variables := $(filter-out $(_readonly_late_variables),$(_product_var_list))
 

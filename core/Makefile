@@ -229,6 +229,7 @@ define generate-common-build-props
 	PRODUCT_MANUFACTURER="$(PRODUCT_MANUFACTURER)" \
 	PRODUCT_MODEL="$(PRODUCT_MODEL)" \
 	PRODUCT_NAME="$(TARGET_PRODUCT)" \
+	$(PRODUCT_BUILD_PROP_OVERRIDES) \
 	$(call generate-common-build-props-with-product-vars-set,$(1),$(2))
 endef
 
@@ -243,6 +244,7 @@ define generate-common-build-props-with-product-vars-set
 	PLATFORM_SDK_VERSION="$(PLATFORM_SDK_VERSION)" \
 	PLATFORM_VERSION_LAST_STABLE="$(PLATFORM_VERSION_LAST_STABLE)" \
 	PLATFORM_VERSION="$(PLATFORM_VERSION)" \
+        $(PRODUCT_BUILD_PROP_OVERRIDES) \
 	TARGET_BUILD_TYPE="$(TARGET_BUILD_VARIANT)" \
 	bash $(BUILDINFO_COMMON_SH) "$(1)" >> $(2)
 endef
@@ -324,9 +326,9 @@ endif
 # Both of these tags will be removed and replaced with "release-keys"
 # when the target-files is signed in a post-build step.
 ifeq ($(DEFAULT_SYSTEM_DEV_CERTIFICATE),build/make/target/product/security/testkey)
-BUILD_KEYS := test-keys
+BUILD_KEYS := release-keys
 else
-BUILD_KEYS := dev-keys
+BUILD_KEYS := release-keys
 endif
 BUILD_VERSION_TAGS += $(BUILD_KEYS)
 BUILD_VERSION_TAGS := $(subst $(space),$(comma),$(sort $(BUILD_VERSION_TAGS)))
@@ -416,12 +418,15 @@ endif
 	        PRODUCT_MODEL="$(PRODUCT_SYSTEM_MODEL)" \
 	        PRODUCT_NAME="$(PRODUCT_SYSTEM_NAME)" \
 	        PRODUCT_DEVICE="$(PRODUCT_SYSTEM_DEVICE)" \
+	        $(PRODUCT_BUILD_PROP_OVERRIDES) \
 	        $(call generate-common-build-props-with-product-vars-set,system,$@)
 	$(hide) TARGET_BUILD_TYPE="$(TARGET_BUILD_VARIANT)" \
 	        TARGET_BUILD_FLAVOR="$(TARGET_BUILD_FLAVOR)" \
 	        TARGET_DEVICE="$(TARGET_DEVICE)" \
+	        ONE_DEVICE="$(TARGET_DEVICE)" \
 	        PRODUCT_DEFAULT_LOCALE="$(call get-default-product-locale,$(PRODUCT_LOCALES))" \
 	        PRODUCT_DEFAULT_WIFI_CHANNELS="$(PRODUCT_DEFAULT_WIFI_CHANNELS)" \
+	        PRIVATE_BUILD_DESC="$(PRIVATE_BUILD_DESC)" \
 	        BUILD_ID="$(BUILD_ID)" \
 	        BUILD_KEYS="$(BUILD_KEYS)" \
 	        DISPLAY_BUILD_NUMBER="$(DISPLAY_BUILD_NUMBER)" \
@@ -441,12 +446,14 @@ endif
 	        PLATFORM_VERSION_ALL_CODENAMES="$(PLATFORM_VERSION_ALL_CODENAMES)" \
 	        PLATFORM_MIN_SUPPORTED_TARGET_SDK_VERSION="$(PLATFORM_MIN_SUPPORTED_TARGET_SDK_VERSION)" \
 	        BUILD_VERSION_TAGS="$(BUILD_VERSION_TAGS)" \
+	        BUILD_FINGERPRINT="$(BUILD_FINGERPRINT_FROM_FILE)" \
 	        $(if $(OEM_THUMBPRINT_PROPERTIES),BUILD_THUMBPRINT="$(BUILD_THUMBPRINT_FROM_FILE)") \
 	        TARGET_CPU_ABI_LIST="$(TARGET_CPU_ABI_LIST)" \
 	        TARGET_CPU_ABI_LIST_32_BIT="$(TARGET_CPU_ABI_LIST_32_BIT)" \
 	        TARGET_CPU_ABI_LIST_64_BIT="$(TARGET_CPU_ABI_LIST_64_BIT)" \
 	        TARGET_CPU_ABI="$(TARGET_CPU_ABI)" \
 	        TARGET_CPU_ABI2="$(TARGET_CPU_ABI2)" \
+		$(PRODUCT_BUILD_PROP_OVERRIDES) \
 	        bash $(BUILDINFO_SH) >> $@
 	$(hide) $(foreach file,$(system_prop_file), \
 	    if [ -f "$(file)" ]; then \
@@ -1393,6 +1400,7 @@ endif # BUILDING_VENDOR_BOOT_IMAGE
 # $(5) - Directory to use.  Notice files are all $(5)/src.  Other
 #		 directories in there will be used for scratch
 # $(6) - Dependencies for the output files
+# $(7) - Directories to exclude
 #
 # The algorithm here is that we go collect a hash for each of the notice
 # files and write the names of the files that match that hash.  Then
@@ -1410,7 +1418,7 @@ $(2) $(3): PRIVATE_MESSAGE := $(4)
 $(2) $(3): PRIVATE_DIR := $(5)
 $(2) : $(3)
 $(3) : $(6) $(BUILD_SYSTEM)/Makefile build/make/tools/generate-notice-files.py
-	build/make/tools/generate-notice-files.py --text-output $(2) \
+	build/make/tools/generate-notice-files.py --text-output $(2) $(foreach xdir, $(7), -e $(xdir) )\
 	    $(if $(filter $(1),xml_excluded_vendor_product_odm),-e vendor -e product -e system_ext -e odm --xml-output, \
 	      $(if $(filter $(1),xml_excluded_system_product_odm),-e system -e product -e system_ext -e odm --xml-output, \
 	        $(if $(filter $(1),xml_product),-i product --xml-output, \
@@ -1435,6 +1443,11 @@ kernel_notice_file := $(TARGET_OUT_NOTICE_FILES)/src/kernel.txt
 winpthreads_notice_file := $(TARGET_OUT_NOTICE_FILES)/src/winpthreads.txt
 pdk_fusion_notice_files := $(filter $(TARGET_OUT_NOTICE_FILES)/%, $(ALL_PDK_FUSION_FILES))
 
+# Some targets get included under $(PRODUCT_OUT) for debug symbols or other
+# reasons--not to be flashed onto any device. Targets under these directories
+# need no associated notice file on the device UI.
+exclude_target_dirs := apex
+
 # TODO(b/69865032): Make PRODUCT_NOTICE_SPLIT the default behavior.
 ifneq ($(PRODUCT_NOTICE_SPLIT),true)
 target_notice_file_html := $(TARGET_OUT_INTERMEDIATES)/NOTICE.html
@@ -1445,7 +1458,8 @@ $(eval $(call combine-notice-files, html, \
 	        $(target_notice_file_html), \
 	        "Notices for files contained in the filesystem images in this directory:", \
 	        $(TARGET_OUT_NOTICE_FILES), \
-	        $(ALL_DEFAULT_INSTALLED_MODULES) $(kernel_notice_file) $(pdk_fusion_notice_files)))
+	        $(ALL_DEFAULT_INSTALLED_MODULES) $(kernel_notice_file) $(pdk_fusion_notice_files), \
+	        $(exclude_target_dirs)))
 $(target_notice_file_html_gz): $(target_notice_file_html) | $(MINIGZIP)
 	$(hide) $(MINIGZIP) -9 < $< > $@
 $(installed_notice_html_or_xml_gz): $(target_notice_file_html_gz)
@@ -1479,10 +1493,13 @@ installed_odm_notice_xml_gz := $(TARGET_OUT_ODM)/etc/NOTICE.xml.gz
 # being built. A notice xml file must depend on all modules that could potentially
 # install a license file relevant to it.
 license_modules := $(ALL_DEFAULT_INSTALLED_MODULES) $(kernel_notice_file) $(pdk_fusion_notice_files)
+# Only files copied to a system image need system image notices.
+license_modules := $(filter $(PRODUCT_OUT)/%,$(license_modules))
 # Phonys/fakes don't have notice files (though their deps might)
 license_modules := $(filter-out $(TARGET_OUT_FAKE)/%,$(license_modules))
 # testcases are not relevant to the system image.
 license_modules := $(filter-out $(TARGET_OUT_TESTCASES)/%,$(license_modules))
+# filesystem images: system, vendor, product, system_ext, and odm
 license_modules_system := $(filter $(TARGET_OUT)/%,$(license_modules))
 # system_other is relevant to system partition.
 license_modules_system += $(filter $(TARGET_OUT_SYSTEM_OTHER)/%,$(license_modules))
@@ -1495,16 +1512,44 @@ license_modules_agg := $(license_modules_system) \
                        $(license_modules_product) \
                        $(license_modules_system_ext) \
                        $(license_modules_odm)
+# targets used for debug symbols only and do not get copied to the device
+license_modules_symbols_only := $(filter $(PRODUCT_OUT)/apex/%,$(license_modules))
+
 license_modules_rest := $(filter-out $(license_modules_agg),$(license_modules))
+license_modules_rest := $(filter-out $(license_modules_symbols_only),$(license_modules_rest))
+
+# Identify the other targets we expect to have notices for:
+# targets copied to the device but are not readable by the UI (e.g. must boot
+# into a different partition to read or don't have an associated /etc
+# directory) must have their notices built somewhere readable.
+license_modules_rehomed := $(filter-out $(PRODUCT_OUT)/%/%,$(license_modules_rest))  # files in root have no /etc
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/recovery/%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/root/%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/data/%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/ramdisk/%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/debug_ramdisk/%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/vendor-ramdisk/%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/persist/%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/persist.img,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/system_other/%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/kernel%,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/%.img,$(license_modules_rest))
+license_modules_rehomed += $(filter $(PRODUCT_OUT)/%.bin,$(license_modules_rest))
+
+# after removing targets in system images, targets reported in system images, and
+# targets used for debug symbols that do not need notices, nothing must remain.
+license_modules_rest := $(filter-out $(license_modules_rehomed),$(license_modules_rest))
+$(call maybe-print-list-and-error, $(license_modules_rest), \
+        "Targets added under $(PRODUCT_OUT)/ unaccounted for notice handling.")
 
 # If we are building in a configuration that includes a prebuilt vendor.img, we can't
 # update its notice file, so include those notices in the system partition instead
 ifdef BOARD_PREBUILT_VENDORIMAGE
-license_modules_system += $(license_modules_rest)
+license_modules_system += $(license_modules_rehomed)
 system_xml_directories := xml_excluded_vendor_product_odm
 system_notice_file_message := "Notices for files contained in all filesystem images except vendor/system_ext/product/odm in this directory:"
 else
-license_modules_vendor += $(license_modules_rest)
+license_modules_vendor += $(license_modules_rehomed)
 system_xml_directories := xml_system
 system_notice_file_message := "Notices for files contained in the system filesystem image in this directory:"
 endif
@@ -1514,31 +1559,36 @@ $(eval $(call combine-notice-files, $(system_xml_directories), \
 	        $(target_notice_file_xml), \
 	        $(system_notice_file_message), \
 	        $(TARGET_OUT_NOTICE_FILES), \
-	        $(license_modules_system)))
+	        $(license_modules_system), \
+	        $(exclude_target_dirs)))
 $(eval $(call combine-notice-files, xml_excluded_system_product_odm, \
 	        $(target_vendor_notice_file_txt), \
 	        $(target_vendor_notice_file_xml), \
 	        "Notices for files contained in all filesystem images except system/system_ext/product/odm in this directory:", \
 	        $(TARGET_OUT_NOTICE_FILES), \
-	        $(license_modules_vendor)))
+	        $(license_modules_vendor), \
+	        $(exclude_target_dirs)))
 $(eval $(call combine-notice-files, xml_product, \
 	        $(target_product_notice_file_txt), \
 	        $(target_product_notice_file_xml), \
 	        "Notices for files contained in the product filesystem image in this directory:", \
 	        $(TARGET_OUT_NOTICE_FILES), \
-	        $(license_modules_product)))
+	        $(license_modules_product), \
+	        $(exclude_target_dirs)))
 $(eval $(call combine-notice-files, xml_system_ext, \
 	        $(target_system_ext_notice_file_txt), \
 	        $(target_system_ext_notice_file_xml), \
 	        "Notices for files contained in the system_ext filesystem image in this directory:", \
 	        $(TARGET_OUT_NOTICE_FILES), \
-	        $(license_modules_system_ext)))
+	        $(license_modules_system_ext), \
+	        $(exclude_target_dirs)))
 $(eval $(call combine-notice-files, xml_odm, \
 	        $(target_odm_notice_file_txt), \
 	        $(target_odm_notice_file_xml), \
 	        "Notices for files contained in the odm filesystem image in this directory:", \
 	        $(TARGET_OUT_NOTICE_FILES), \
-	        $(license_modules_odm)))
+	        $(license_modules_odm), \
+	        $(exclude_target_dirs)))
 
 $(target_notice_file_xml_gz): $(target_notice_file_xml) | $(MINIGZIP)
 	$(hide) $(MINIGZIP) -9 < $< > $@
@@ -1576,7 +1626,8 @@ $(eval $(call combine-notice-files, html, \
 	        "Notices for files contained in the tools directory:", \
 	        $(HOST_OUT_NOTICE_FILES), \
 	        $(ALL_DEFAULT_INSTALLED_MODULES) \
-	        $(winpthreads_notice_file)))
+	        $(winpthreads_notice_file), \
+	        $(exclude_target_dirs)))
 
 endif  # TARGET_BUILD_APPS
 
@@ -2501,6 +2552,7 @@ endef
 
 ifneq ($(BOARD_AVB_VENDOR_BOOT_KEY_PATH),)
 $(INSTALLED_VENDOR_DEBUG_BOOTIMAGE_TARGET): $(AVBTOOL) $(BOARD_AVB_VENDOR_BOOT_TEST_KEY_PATH)
+
 endif
 
 # Depends on vendor_boot.img and vendor-ramdisk-debug.cpio.gz to build the new vendor_boot-debug.img
@@ -2617,6 +2669,10 @@ INTERNAL_SYSTEMIMAGE_FILES := $(sort $(filter $(TARGET_OUT)/%, \
     $(PDK_FUSION_SYMLINK_STAMP))
 
 FULL_SYSTEMIMAGE_DEPS := $(INTERNAL_SYSTEMIMAGE_FILES) $(INTERNAL_USERIMAGES_DEPS)
+
+ifeq ($(BOARD_BUILD_SYSTEM_ROOT_IMAGE),true)
+  FULL_SYSTEMIMAGE_DEPS += $(INSTALLED_KERNEL_TARGET)
+endif
 
 # ASAN libraries in the system image - add dependency.
 ASAN_IN_SYSTEM_INSTALLED := $(TARGET_OUT)/asan.tar.bz2
@@ -3346,6 +3402,12 @@ endif # BOARD_PREBUILT_DTBOIMAGE
 define images-for-partitions
 $(strip $(foreach item,$(1),$(INSTALLED_$(call to-upper,$(item))IMAGE_TARGET)))
 endef
+
+ifdef TARGET_NEEDS_DTBOIMAGE
+INSTALLED_DTBOIMAGE_TARGET := $(PRODUCT_OUT)/dtbo.img
+else ifdef BOARD_KERNEL_SEPARATED_DTBO
+INSTALLED_DTBOIMAGE_TARGET := $(PRODUCT_OUT)/dtbo.img
+endif
 
 # -----------------------------------------------------------------
 # custom images
@@ -4325,6 +4387,9 @@ endif
 ifeq ($(BOARD_USES_FULL_RECOVERY_IMAGE),true)
 	$(hide) echo "full_recovery_image=true" >> $@
 endif
+ifdef BUILDING_VENDOR_IMAGE
+	$(hide) echo "board_builds_vendorimage=true" >> $@
+endif
 ifdef BOARD_USES_VENDORIMAGE
 	$(hide) echo "board_uses_vendorimage=true" >> $@
 endif
@@ -4421,6 +4486,9 @@ ifdef DEVICE_MANIFEST_SKUS
 endif
 ifdef DEVICE_MANIFEST_FILE
 	$(hide) echo "vintf_include_empty_vendor_sku=true" >> $@
+endif
+ifneq ($(TARGET_OTA_ASSERT_DEVICE),)
+	$(hide) echo "ota_override_device=$(TARGET_OTA_ASSERT_DEVICE)" >> $@
 endif
 
 .PHONY: misc_info
@@ -4835,10 +4903,10 @@ ifdef BOARD_PREBUILT_ODMIMAGE
 	$(hide) mkdir -p $(zip_root)/IMAGES
 	$(hide) cp $(INSTALLED_ODMIMAGE_TARGET) $(zip_root)/IMAGES/
 endif
-ifdef BOARD_PREBUILT_DTBOIMAGE
+ifdef INSTALLED_DTBOIMAGE_TARGET
 	$(hide) mkdir -p $(zip_root)/PREBUILT_IMAGES
 	$(hide) cp $(INSTALLED_DTBOIMAGE_TARGET) $(zip_root)/PREBUILT_IMAGES/
-endif # BOARD_PREBUILT_DTBOIMAGE
+endif # INSTALLED_DTBOIMAGE_TARGET
 ifneq ($(strip $(BOARD_CUSTOMIMAGES_PARTITION_LIST)),)
 	$(hide) mkdir -p $(zip_root)/PREBUILT_IMAGES
 	$(hide) $(foreach partition,$(BOARD_CUSTOMIMAGES_PARTITION_LIST), \
@@ -4906,7 +4974,7 @@ endif
 	@# help early validation of the .zip file while uploading it.
 	$(hide) find $(zip_root)/META | sort >$@.list
 	$(hide) find $(zip_root) -path $(zip_root)/META -prune -o -print | sort >>$@.list
-	$(hide) $(SOONG_ZIP) -d -o $@ -C $(zip_root) -l $@.list
+	$(hide) $(SOONG_ZIP) -L 0 -d -o $@ -C $(zip_root) -l $@.list
 
 .PHONY: target-files-package
 target-files-package: $(BUILT_TARGET_FILES_PACKAGE)

@@ -162,6 +162,7 @@ LOCAL_LOGTAGS_FILES:=
 LOCAL_MANIFEST_FILE:=
 LOCAL_MANIFEST_INSTRUMENTATION_FOR:=
 LOCAL_MANIFEST_PACKAGE_NAME:=
+LOCAL_AIDL_FLAGS:=
 LOCAL_MIN_SDK_VERSION:=
 LOCAL_MODULE:=
 LOCAL_MODULE_CLASS:=
@@ -497,6 +498,9 @@ LOCAL_IS_AUX_MODULE :=
 
 full_android_manifest :=
 non_system_module :=
+
+# Include any vendor specific clear_vars.mk file
+-include vendor/*/build/core/clear_vars.mk
 
 # Trim MAKEFILE_LIST so that $(call my-dir) doesn't need to
 # iterate over thousands of entries every time.

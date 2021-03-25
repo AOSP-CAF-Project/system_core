@@ -35,6 +35,12 @@ Invoke ". build/envsetup.sh" from your shell to add the following functions to y
 - pathmod:    Get the directory containing a module.
 - refreshmod: Refresh list of modules for allmod/gomod.
 
+EOF
+
+    __print_one_functions_help
+
+cat <<EOF
+
 Environment options:
 - SANITIZE_HOST: Set to 'address' to use ASAN for all host modules.
 - ANDROID_QUIET_BUILD: set to 'true' to display only the essential messages.
@@ -44,7 +50,7 @@ EOF
     local T=$(gettop)
     local A=""
     local i
-    for i in `cat $T/build/envsetup.sh | sed -n "/^[[:blank:]]*function /s/function \([a-z_]*\).*/\1/p" | sort | uniq`; do
+    for i in `cat $T/build/envsetup.sh $T/vendor/one/build/envsetup.sh | sed -n "/^[[:blank:]]*function /s/function \([a-z_]*\).*/\1/p" | sort | uniq`; do
       A="$A $i"
     done
     echo $A
@@ -55,8 +61,8 @@ function build_build_var_cache()
 {
     local T=$(gettop)
     # Grep out the variable names from the script.
-    cached_vars=(`cat $T/build/envsetup.sh | tr '()' '  ' | awk '{for(i=1;i<=NF;i++) if($i~/get_build_var/) print $(i+1)}' | sort -u | tr '\n' ' '`)
-    cached_abs_vars=(`cat $T/build/envsetup.sh | tr '()' '  ' | awk '{for(i=1;i<=NF;i++) if($i~/get_abs_build_var/) print $(i+1)}' | sort -u | tr '\n' ' '`)
+    cached_vars=`cat $T/build/envsetup.sh $T/vendor/one/build/envsetup.sh | tr '()' '  ' | awk '{for(i=1;i<=NF;i++) if($i~/get_build_var/) print $(i+1)}' | sort -u | tr '\n' ' '`
+    cached_abs_vars=`cat $T/build/envsetup.sh $T/vendor/one/build/envsetup.sh | tr '()' '  ' | awk '{for(i=1;i<=NF;i++) if($i~/get_abs_build_var/) print $(i+1)}' | sort -u | tr '\n' ' '`
     # Call the build system to dump the "<val>=<value>" pairs as a shell script.
     build_dicts_script=`\builtin cd $T; build/soong/soong_ui.bash --dumpvars-mode \
                         --vars="${cached_vars[*]}" \
@@ -138,6 +144,13 @@ function check_product()
         echo "Couldn't locate the top of the tree.  Try setting TOP." >&2
         return
     fi
+    if (echo -n $1 | grep -q -e "^one_") ; then
+        ONE_BUILD=$(echo -n $1 | sed -e 's/^one_//g')
+    else
+        ONE_BUILD=
+    fi
+    export ONE_BUILD
+
         TARGET_PRODUCT=$1 \
         TARGET_BUILD_VARIANT= \
         TARGET_BUILD_TYPE= \
@@ -334,7 +347,6 @@ function set_stuff_for_environment()
     setpaths
     set_sequence_number
 
-    export ANDROID_BUILD_TOP=$(gettop)
     # With this environment variable new GCC can apply colors to warnings/errors
     export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
 }
@@ -648,6 +660,8 @@ function lunch()
         echo "Invalid lunch combo: $selection"
         return 1
     fi
+
+    check_product $product
 
     TARGET_PRODUCT=$product \
     TARGET_BUILD_VARIANT=$variant \
@@ -1572,36 +1586,6 @@ function mmma()
 
 function make()
 {
-    call_hook ${FUNCNAME[0]} $@
-    if [ $? -ne 0 ]; then
-        return 1
-    fi
-
-    if [ -f $ANDROID_BUILD_TOP/$QTI_BUILDTOOLS_DIR/build/update-vendor-hal-makefiles.sh ]; then
-        vendor_hal_script=$ANDROID_BUILD_TOP/$QTI_BUILDTOOLS_DIR/build/update-vendor-hal-makefiles.sh
-        source $vendor_hal_script --check
-        regen_needed=$?
-    else
-        vendor_hal_script=$ANDROID_BUILD_TOP/device/qcom/common/vendor_hal_makefile_generator.sh
-        regen_needed=1
-    fi
-
-    if [ $regen_needed -eq 1 ]; then
-        _wrap_build $(get_make_command hidl-gen) hidl-gen ALLOW_MISSING_DEPENDENCIES=true
-        RET=$?
-        if [ $RET -ne 0 ]; then
-            echo -n "${color_failed}#### hidl-gen compilation failed, check above errors"
-            echo " ####${color_reset}"
-            return $RET
-        fi
-        source $vendor_hal_script
-        RET=$?
-        if [ $RET -ne 0 ]; then
-            echo -n "${color_failed}#### HAL file .bp generation failed dure to incpomaptible HAL files , please check above error log"
-            echo " ####${color_reset}"
-            return $RET
-        fi
-    fi
     _wrap_build $(get_make_command "$@") "$@"
 }
 
@@ -1694,3 +1678,18 @@ function source_vendorsetup() {
 validate_current_shell
 source_vendorsetup
 addcompletions
+
+# check and set ccache path on envsetup
+if [ -z ${CCACHE_EXEC} ]; then
+    ccache_path=$(which ccache)
+    if [ ! -z "$ccache_path" ]; then
+        export CCACHE_EXEC="$ccache_path"
+        echo "ccache found and CCACHE_EXEC has been set to : $ccache_path"
+    else
+        echo "ccache not found/installed!"
+    fi
+fi
+
+export ANDROID_BUILD_TOP=$(gettop)
+
+. $ANDROID_BUILD_TOP/vendor/one/build/envsetup.sh
