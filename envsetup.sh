@@ -346,7 +346,6 @@ function set_stuff_for_environment()
 {
     setpaths
     set_sequence_number
-
     # With this environment variable new GCC can apply colors to warnings/errors
     export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
 }
@@ -607,6 +606,40 @@ function print_lunch_menu()
     echo
 }
 
+function link_hals() {
+    local TARGET_QCOM_VARIANT=$(get_build_var QCOM_HARDWARE_VARIANT)
+    local TARGET_BOARD_PLATFORM=$(get_build_var TARGET_BOARD_PLATFORM)
+    local DISPLAY_PATH=$(gettop)/hardware/qcom/${TARGET_QCOM_VARIANT}/display
+    local MEDIA_PATH=$(gettop)/hardware/qcom/${TARGET_QCOM_VARIANT}/media
+    local AUDIO_PATH=$(gettop)/hardware/qcom/${TARGET_QCOM_VARIANT}/audio
+    local HAL_LIST="${DISPLAY_PATH} ${MEDIA_PATH} ${AUDIO_PATH}"
+    local BOARD_PATH=$(pwd)/vendor/qcom/defs/board-defs/vendor
+    local PRODUCT_PATH=$(pwd)/vendor/qcom/defs/product-defs/vendor
+    [ ! -d ${BOARD_PATH} ] && mkdir ${BOARD_PATH}
+    [ ! -d ${PRODUCT_PATH} ] && mkdir ${PRODUCT_PATH}
+    cd ${PRODUCT_PATH} && rm -f $(echo "$(get_build_var QCOM_BOARD_PLATFORMS)" | tr -s [:space:] ' ' | sed "s: :.mk :g")
+    cd $(gettop)
+    for HAL in ${HAL_LIST}; do
+        [ -d ${HAL} ] && {
+            local HAL_NAME=$(echo ${HAL} | awk -F'/' '{ print $NF }')
+            rm -rf $(gettop)/hardware/qcom/${HAL_NAME} ${BOARD_PATH}/*${HAL_NAME}*mk ${PRODUCT_PATH}/*${HAL_NAME}*mk
+            cp -r ${HAL} $(gettop)/hardware/qcom/${HAL_NAME}
+            PRODUCT_MK=$(find ${HAL}/ -type f -name "*product*.mk")
+            BOARD_MK=$(find ${HAL}/ -type f -name "*board*.mk")
+            TARGET_MK=$(find ${HAL}/ -type f -name "${TARGET_BOARD_PLATFORM}.mk")
+            [ -f ${PRODUCT_MK} ] && {
+                ln -sf ${PRODUCT_MK} ${PRODUCT_PATH}/${HAL_NAME}-product.mk
+            }
+            [ -f ${BOARD_MK} ] && {
+                ln -sf ${BOARD_MK} ${BOARD_PATH}/${HAL_NAME}-board.mk
+            }
+            [ -f ${TARGET_MK} ] && {
+                ln -sf ${TARGET_MK} ${PRODUCT_PATH}/${TARGET_BOARD_PLATFORM}.mk
+            }
+        }
+    done
+}
+
 function lunch()
 {
     local answer
@@ -684,6 +717,7 @@ function lunch()
     echo
 
     set_stuff_for_environment
+    link_hals
     printconfig
     destroy_build_var_cache
 }
